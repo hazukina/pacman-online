@@ -251,16 +251,14 @@ function gameTick(room) {
     }
   }
 
-  // Move ghosts (AI-controlled)
+  // Move ghosts (player-controlled)
   for (const ghost of ghosts) {
-    ghostAI(room, ghost);
     const speed = GHOST_SPEED * CELL / (1000 / TICK_MS);
-    if (canMove(room.maze, ghost.x, ghost.y, ghost.dx, ghost.dy)) {
-      ghost.x += ghost.dx;
-      ghost.y += ghost.dy;
-    } else {
-      ghost.dx = 0;
-      ghost.dy = 0;
+    if (ghost.dx !== 0 || ghost.dy !== 0) {
+      if (canMove(room.maze, ghost.x, ghost.y, ghost.dx * speed, ghost.dy * speed)) {
+        ghost.x += ghost.dx * speed;
+        ghost.y += ghost.dy * speed;
+      }
     }
   }
 
@@ -387,11 +385,8 @@ io.on('connection', (socket) => {
     if (!room || room.phase !== 'playing') return;
     const player = room.players[socket.id];
     if (!player || player.role !== 'ghost') return;
-    const speed = GHOST_SPEED * CELL / (1000 / TICK_MS);
-    if (canMove(room.maze, player.x, player.y, dx * speed, dy * speed)) {
-      player.dx = dx;
-      player.dy = dy;
-    }
+    player.dx = dx;
+    player.dy = dy;
   });
 
   socket.on('restart', () => {
