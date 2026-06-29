@@ -23,21 +23,21 @@ const MAZE_TEMPLATE = [
   [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
   [1,2,1,1,2,1,2,1,1,1,1,1,1,1,2,1,2,1,1,2,1],
   [1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1],
-  [1,1,1,1,2,1,1,1,0,0,1,0,0,1,1,1,2,1,1,1,1],
-  [1,1,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,1,1],
-  [1,1,1,1,2,1,0,1,1,0,0,0,1,1,0,1,2,1,1,1,1],
+  [1,2,1,1,2,1,1,1,0,0,1,0,0,1,1,1,2,1,1,2,1],
+  [1,2,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,2,1],
+  [1,2,2,2,2,1,0,1,1,0,0,0,1,1,0,1,2,2,2,2,1],
   [0,0,0,0,2,0,0,1,0,0,0,0,0,1,0,0,2,0,0,0,0],
-  [1,1,1,1,2,1,0,1,1,1,1,1,1,1,0,1,2,1,1,1,1],
-  [1,1,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,1,1],
-  [1,1,1,1,2,1,0,1,1,1,1,1,1,1,0,1,2,1,1,1,1],
-  [1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1],
-  [1,2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,2,1,1,2,1],
-  [1,3,2,1,2,2,2,2,2,2,0,2,2,2,2,2,2,1,2,3,1],
-  [1,1,2,1,2,1,2,1,1,1,1,1,1,1,2,1,2,1,2,1,1],
-  [1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1],
-  [1,2,1,1,1,1,1,1,2,1,1,1,2,1,1,1,1,1,1,2,1],
+  [1,2,2,2,2,1,0,1,1,1,1,1,1,1,0,1,2,2,2,2,1],
+  [1,2,1,1,2,1,0,0,0,0,0,0,0,0,0,1,2,1,1,2,1],
+  [1,2,1,1,2,1,0,1,1,1,1,1,1,1,0,1,2,1,1,2,1],
   [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
-  [1,2,1,1,2,1,1,1,2,1,1,1,2,1,1,1,2,1,1,2,1],
+  [1,2,1,2,2,1,1,2,2,1,1,1,2,2,1,1,2,2,1,2,1],
+  [1,3,2,2,2,2,2,2,2,2,0,2,2,2,2,2,2,2,2,3,1],
+  [1,2,2,2,2,1,2,1,1,1,1,1,1,1,2,1,2,2,2,2,1],
+  [1,2,2,2,2,1,2,2,2,2,2,2,2,2,2,1,2,2,2,2,1],
+  [1,2,1,2,2,2,1,1,2,1,1,1,2,1,1,2,2,2,1,2,1],
+  [1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1],
+  [1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1,2,2,2,2,1],
   [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
 ];
 
@@ -55,8 +55,9 @@ const GHOST_SPAWNS = [
 ];
 
 // Speed: cells per second
-const PACMAN_SPEED = 5;
-const GHOST_SPEED  = 4;
+const PACMAN_SPEED = 2.5;
+const GHOST_SPEED  = 2.0;
+const GHOST_BOOST_SPEED = 4.0;
 const TICK_MS = 50; // 20 ticks/sec
 
 // ─── Room store ────────────────────────────────────────────────────────────
@@ -82,6 +83,7 @@ function createRoom(roomId) {
     totalPellets: countPellets(makeMaze()),
     tickInterval: null,
     countdown: 0,
+    mode: 'normal',
   };
 }
 
@@ -115,6 +117,9 @@ function assignRoles(room) {
     }
     p.score = 0;
     p.alive = true;
+    p.skillUses = (room.mode === 'item') ? 1 : 0;
+    p.stunUntil = 0;
+    p.speedBoostUntil = 0;
   });
 }
 
@@ -252,8 +257,11 @@ function gameTick(room) {
   }
 
   // Move ghosts (player-controlled)
+  const now = Date.now();
   for (const ghost of ghosts) {
-    const speed = GHOST_SPEED * CELL / (1000 / TICK_MS);
+    if (ghost.stunUntil > now) continue;
+    const baseSpeed = (ghost.speedBoostUntil > now) ? GHOST_BOOST_SPEED : GHOST_SPEED;
+    const speed = baseSpeed * CELL / (1000 / TICK_MS);
     if (ghost.dx !== 0 || ghost.dy !== 0) {
       if (canMove(room.maze, ghost.x, ghost.y, ghost.dx * speed, ghost.dy * speed)) {
         ghost.x += ghost.dx * speed;
@@ -294,11 +302,13 @@ function endGame(room, winner) {
 }
 
 function buildState(room) {
+  const now = Date.now();
   return {
     phase: room.phase,
     maze: room.maze,
     pelletsLeft: room.pelletsLeft,
     totalPellets: room.totalPellets,
+    mode: room.mode,
     players: Object.entries(room.players).map(([id, p]) => ({
       id,
       name: p.name,
@@ -310,6 +320,9 @@ function buildState(room) {
       dy: p.dy,
       score: p.score,
       alive: p.alive,
+      skillUses: p.skillUses || 0,
+      stunned: (p.stunUntil || 0) > now,
+      speedBoosted: (p.speedBoostUntil || 0) > now,
     })),
   };
 }
@@ -354,7 +367,7 @@ io.on('connection', (socket) => {
     broadcastLobby(room);
   });
 
-  socket.on('start_game', () => {
+  socket.on('start_game', (data) => {
     const room = rooms[currentRoomId];
     if (!room) return;
     if (Object.keys(room.players).length < 2) {
@@ -362,6 +375,7 @@ io.on('connection', (socket) => {
       return;
     }
 
+    room.mode = (data && data.mode) || 'normal';
     room.maze = makeMaze();
     room.pelletsLeft = countPellets(room.maze);
     assignRoles(room);
@@ -378,6 +392,24 @@ io.on('connection', (socket) => {
     if (!player || player.role !== 'pacman') return;
     player.nextDx = dx;
     player.nextDy = dy;
+  });
+
+  socket.on('use_skill', () => {
+    const room = rooms[currentRoomId];
+    if (!room || room.phase !== 'playing' || room.mode !== 'item') return;
+    const player = room.players[socket.id];
+    if (!player || player.skillUses <= 0) return;
+
+    const now = Date.now();
+    player.skillUses = 0;
+
+    if (player.role === 'pacman') {
+      Object.values(room.players)
+        .filter(p => p.role === 'ghost')
+        .forEach(g => { g.stunUntil = now + 2000; });
+    } else if (player.role === 'ghost') {
+      player.speedBoostUntil = now + 2000;
+    }
   });
 
   socket.on('ghost_move', ({ dx, dy }) => {

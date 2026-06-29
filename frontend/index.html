@@ -127,6 +127,12 @@
   }
   .player-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .waiting-hint { color: #666; font-size: 0.85rem; text-align: center; margin-bottom: 16px; }
+  .mode-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .mode-btn { flex: 1; width: auto; background: #0a0a2a; border: 2px solid #333366; color: #666; }
+  .mode-btn:hover { background: #111133; color: #aaa; border-color: #5555aa; }
+  .mode-btn.active { border-color: #FFD700; color: #FFD700; background: #2a2a00; }
+  .mode-btn.active:hover { background: #2a2a00; }
+  .mode-desc { font-size: 0.76rem; color: #888; text-align: center; margin-bottom: 14px; min-height: 16px; }
 
   /* ── Game screen ── */
   #game-screen {
@@ -300,6 +306,14 @@
     <ul id="player-list"></ul>
 
     <div class="waiting-hint" id="waiting-hint">友達にルームIDを共有してください（2〜4人）</div>
+
+    <h2 style="margin-bottom:10px;">ゲームモード</h2>
+    <div class="mode-row">
+      <button class="btn mode-btn active" id="mode-btn-normal" onclick="selectMode('normal')">普通モード</button>
+      <button class="btn mode-btn" id="mode-btn-item" onclick="selectMode('item')">アイテムモード</button>
+    </div>
+    <div class="mode-desc" id="mode-desc">通常のパックマン</div>
+
     <button class="btn btn-green" id="btn-start" disabled>ゲーム開始</button>
     <button class="btn btn-gray" id="btn-back-lobby" style="margin-top:6px;">← 戻る</button>
     <div class="error-msg" id="lobby-error"></div>
@@ -339,6 +353,11 @@
       </div>
     </div>
 
+    <div class="side-card" id="skill-card" style="display:none;">
+      <h3>スキル</h3>
+      <div id="skill-info" style="font-size:0.82rem; line-height:2;"></div>
+    </div>
+
     <div class="side-card" id="controls-card">
       <h3>操作</h3>
       <div id="controls-info"></div>
@@ -362,6 +381,100 @@
 <!-- Socket.io client from CDN -->
 <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 <script>
+// ─── Audio ───────────────────────────────────────────────────────────────────
+const MASTER_VOL = 0.4;
+let audioCtx = null;
+let bgmPlaying = false;
+let bgmTimerId = null;
+let prevMaze = null;
+let wakaPhase = 0;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playTone(freq, duration, type, vol) {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = type || 'square';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  gain.gain.setValueAtTime(MASTER_VOL * (vol || 0.3), ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration + 0.01);
+}
+
+function playWaka() {
+  wakaPhase = 1 - wakaPhase;
+  playTone(wakaPhase ? 420 : 320, 0.08, 'square', 0.22);
+}
+
+function playPowerPellet() {
+  const ctx = ensureAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = 'sawtooth';
+  const t = ctx.currentTime;
+  osc.frequency.setValueAtTime(150, t);
+  osc.frequency.exponentialRampToValueAtTime(950, t + 0.35);
+  gain.gain.setValueAtTime(MASTER_VOL * 0.45, t);
+  gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+  osc.start(t);
+  osc.stop(t + 0.5);
+}
+
+// BGM: Pac-Man theme inspired melody (notes: [hz, ms])
+const BGM_MELODY = [
+  [494,100],[988,100],[740,100],[622,100],[988,100],[740,100],[622,100],
+  [523,100],[1047,100],[784,100],[659,100],[1047,100],[784,100],[659,100],
+  [494,100],[988,100],[740,100],[622,100],[988,100],[740,100],[622,100],
+  [466,100],[466,100],[466,100],[466,280],
+  [494,100],[494,100],[494,100],[494,280],
+  [523,200],[523,400],
+];
+
+function scheduleBGM(idx) {
+  if (!bgmPlaying) return;
+  const [freq, ms] = BGM_MELODY[idx];
+  playTone(freq, ms / 1000 * 0.82, 'square', 0.14);
+  bgmTimerId = setTimeout(() => scheduleBGM((idx + 1) % BGM_MELODY.length), ms);
+}
+
+function startBGM() {
+  if (bgmPlaying) return;
+  bgmPlaying = true;
+  prevMaze = null;
+  ensureAudio();
+  scheduleBGM(0);
+}
+
+function stopBGM() {
+  bgmPlaying = false;
+  if (bgmTimerId) { clearTimeout(bgmTimerId); bgmTimerId = null; }
+}
+
+function checkPelletSounds(maze) {
+  if (!prevMaze) { prevMaze = maze; return; }
+  for (let r = 0; r < maze.length; r++) {
+    for (let c = 0; c < maze[r].length; c++) {
+      if (prevMaze[r][c] === 3 && maze[r][c] === 0) {
+        prevMaze = maze; playPowerPellet(); return;
+      }
+      if (prevMaze[r][c] === 2 && maze[r][c] === 0) {
+        prevMaze = maze; playWaka(); return;
+      }
+    }
+  }
+  prevMaze = maze;
+}
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 const SERVER_URL = window.location.hostname === 'localhost'
   ? 'http://localhost:3001'
@@ -380,6 +493,7 @@ let myName = '';
 let myRole = null;
 let roomId = null;
 let gameState = null;
+let selectedMode = 'normal';
 let animFrame = null;
 let mouthAngle = 0;
 let mouthDir = 1;
@@ -443,6 +557,7 @@ function connectSocket() {
   });
 
   socket.on('state', (state) => {
+    checkPelletSounds(state.maze);
     gameState = state;
     const me = state.players.find(p => p.id === myId);
     if (me) myRole = me.role;
@@ -450,6 +565,7 @@ function connectSocket() {
   });
 
   socket.on('game_over', (state) => {
+    stopBGM();
     gameState = state;
     showGameOver(state);
   });
@@ -498,13 +614,26 @@ document.getElementById('join-code').addEventListener('input', (e) => {
 
 // ─── Lobby screen ────────────────────────────────────────────────────────────
 document.getElementById('btn-start').addEventListener('click', () => {
-  socket.emit('start_game');
+  socket.emit('start_game', { mode: selectedMode });
   showScreen('game-screen');
   startRenderLoop();
   setupControls();
+  startBGM();
 });
 
+function selectMode(mode) {
+  selectedMode = mode;
+  document.getElementById('mode-btn-normal').classList.toggle('active', mode === 'normal');
+  document.getElementById('mode-btn-item').classList.toggle('active', mode === 'item');
+  const desc = {
+    normal: '通常のパックマン',
+    item: 'Z: スタン攻撃（1回）  /  X: スピードアップ（1回）',
+  };
+  document.getElementById('mode-desc').textContent = desc[mode] || '';
+}
+
 document.getElementById('btn-back-lobby').addEventListener('click', () => {
+  stopBGM();
   socket && socket.disconnect();
   showScreen('start-screen');
 });
@@ -552,6 +681,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     sendMove(...map[e.code]);
   }
+  if (gameState && gameState.mode === 'item') {
+    if (e.code === 'KeyZ' && myRole === 'pacman') { e.preventDefault(); socket.emit('use_skill'); }
+    if (e.code === 'KeyX' && myRole === 'ghost')  { e.preventDefault(); socket.emit('use_skill'); }
+  }
 });
 
 document.addEventListener('keyup', (e) => { delete keys[e.code]; });
@@ -567,6 +700,7 @@ function sendMove(dx, dy) {
 
 // ─── Game over ───────────────────────────────────────────────────────────────
 document.getElementById('btn-restart').addEventListener('click', () => {
+  stopBGM();
   document.getElementById('gameover-overlay').style.display = 'none';
   socket.emit('restart');
   showScreen('lobby-screen');
@@ -574,6 +708,7 @@ document.getElementById('btn-restart').addEventListener('click', () => {
 });
 
 document.getElementById('btn-quit').addEventListener('click', () => {
+  stopBGM();
   socket && socket.disconnect();
   document.getElementById('gameover-overlay').style.display = 'none';
   showScreen('start-screen');
@@ -646,6 +781,31 @@ function updateSidebar(state) {
     const pct = (state.pelletsLeft / state.totalPellets * 100).toFixed(1);
     document.getElementById('pellet-bar').style.width = pct + '%';
     document.getElementById('pellet-count').textContent = state.pelletsLeft;
+  }
+
+  // Skill card (item mode only)
+  const skillCard = document.getElementById('skill-card');
+  if (state.mode === 'item' && me) {
+    skillCard.style.display = '';
+    const uses = me.skillUses || 0;
+    const c = uses > 0 ? '#44ff88' : '#555';
+    const skillEl = document.getElementById('skill-info');
+    if (me.role === 'pacman') {
+      skillEl.innerHTML =
+        `<span style="color:#FFD700;font-weight:bold">Z</span> スタン攻撃<br>` +
+        `残り <span style="color:${c};font-weight:bold">${uses}</span> 回`;
+      // Controls hint
+      document.getElementById('controls-info').innerHTML =
+        '<span>↑↓←→ / WASD</span><br>方向キーで移動<br><span>Z</span> スタン攻撃';
+    } else {
+      skillEl.innerHTML =
+        `<span style="color:#FFD700;font-weight:bold">X</span> スピードアップ<br>` +
+        `残り <span style="color:${c};font-weight:bold">${uses}</span> 回`;
+      document.getElementById('controls-info').innerHTML =
+        '<span>↑↓←→ / WASD</span><br>方向キーで移動<br><span>X</span> スピードアップ';
+    }
+  } else {
+    skillCard.style.display = 'none';
   }
 }
 
@@ -760,11 +920,16 @@ function drawGhost(p) {
   const y = p.y;
   const r = CELL * 0.42;
   const gi = p.ghostIndex || 0;
-  const color = GHOST_COLORS[gi % GHOST_COLORS.length];
+  const isStunned = p.stunned;
+  const isBoosted = p.speedBoosted;
+
+  const color = isStunned
+    ? (Math.sin(Date.now() / 200) > 0 ? '#2255ff' : '#88aaff')
+    : GHOST_COLORS[gi % GHOST_COLORS.length];
 
   ctx.fillStyle = color;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 6;
+  ctx.shadowColor = isBoosted ? '#FF6600' : color;
+  ctx.shadowBlur = isBoosted ? 18 : 6;
 
   // Body (rounded top + wavy bottom)
   ctx.beginPath();
@@ -789,19 +954,33 @@ function drawGhost(p) {
 
   // Eyes
   const eyeY = y - r * 0.1;
-  [-0.3, 0.3].forEach(offset => {
-    const ex = x + r * offset;
-    ctx.fillStyle = '#fff';
-    ctx.beginPath();
-    ctx.ellipse(ex, eyeY, r*0.22, r*0.28, 0, 0, Math.PI*2);
-    ctx.fill();
+  if (isStunned) {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2.5;
+    [-0.3, 0.3].forEach(offset => {
+      const ex = x + r * offset;
+      const s = r * 0.14;
+      ctx.beginPath();
+      ctx.moveTo(ex - s, eyeY - s); ctx.lineTo(ex + s, eyeY + s);
+      ctx.moveTo(ex + s, eyeY - s); ctx.lineTo(ex - s, eyeY + s);
+      ctx.stroke();
+    });
+    ctx.lineWidth = 1;
+  } else {
+    [-0.3, 0.3].forEach(offset => {
+      const ex = x + r * offset;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.ellipse(ex, eyeY, r*0.22, r*0.28, 0, 0, Math.PI*2);
+      ctx.fill();
 
-    ctx.fillStyle = '#00f';
-    const pupilX = ex + Math.cos(ghostAnim * 0.5) * r * 0.08;
-    ctx.beginPath();
-    ctx.arc(pupilX, eyeY + r*0.04, r*0.12, 0, Math.PI*2);
-    ctx.fill();
-  });
+      ctx.fillStyle = '#00f';
+      const pupilX = ex + Math.cos(ghostAnim * 0.5) * r * 0.08;
+      ctx.beginPath();
+      ctx.arc(pupilX, eyeY + r*0.04, r*0.12, 0, Math.PI*2);
+      ctx.fill();
+    });
+  }
 
   drawNameTag(x, y - r - 14, p.name, color);
 }
